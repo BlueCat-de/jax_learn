@@ -6,8 +6,9 @@ from flax.training import train_state  # Useful dataclass to keep train state
 from flax import struct                # Flax dataclasses
 import optax                           # Common loss functions and optimizers
 from module import CNN
-from dataset import get_datasets
-import tensorflow as tf
+from dataset_torch import get_datasets
+# import tensorflow as tf
+import torch
 import wandb
 import ipdb
 
@@ -30,6 +31,7 @@ def create_train_state(module, rng, learning_rate, momentum):
 @jax.jit
 def train_step(state, batch):
   """Train for a single step."""
+  # ipdb.set_trace()
   def loss_fn(params):
     logits = state.apply_fn({'params': params}, batch['image'])
     loss = optax.softmax_cross_entropy_with_integer_labels(
@@ -68,9 +70,9 @@ def main():
     }
   )
 
-  train_ds, test_ds = get_datasets(num_epochs, batch_size)
+  train_loader, test_loader = get_datasets(batch_size)
 
-  tf.random.set_seed(0)
+  torch.random.manual_seed(0)
   init_rng = jax.random.key(0)
 
   learning_rate = 0.01
@@ -80,8 +82,8 @@ def main():
   state = create_train_state(cnn, init_rng, learning_rate, momentum)
   del init_rng  # Must not be used anymore.
 
-  # since train_ds is replicated num_epochs times in get_datasets(), we divide by num_epochs
-  num_steps_per_epoch = train_ds.cardinality().numpy() // num_epochs
+  # # since train_ds is replicated num_epochs times in get_datasets(), we divide by num_epochs
+  # num_steps_per_epoch = train_ds.cardinality().numpy() // num_epochs
   # import ipdb
   # ipdb.set_trace()
 
@@ -89,40 +91,37 @@ def main():
   #                  'train_accuracy': [],
   #                  'test_loss': [],
   #                  'test_accuracy': []}
-  
-  for step, batch in enumerate(train_ds.as_numpy_iterator()):
+  for epoch in range(num_epochs):
+    for batch in train_loader:
 
-    # Run optimization steps over training batches and compute batch metrics
-    state = train_step(state, batch) # get updated train state (which contains the updated parameters)
-    state = compute_metrics(state=state, batch=batch) # aggregate batch metrics
-    # ipdb.set_trace()
+      # ipdb.set_trace()
+      # Run optimization steps over training batches and compute batch metrics
+      batch = {
+        'image': jnp.array(batch[0].view(32, 28, 28, 1)),
+        'label': jnp.array(batch[1])
+      }
+      state = train_step(state, batch) # get updated train state (which contains the updated parameters)
+      state = compute_metrics(state=state, batch=batch) # aggregate batch metrics
+      # ipdb.set_trace()
+
+      wandb.log({
+        'train_loss': state.metrics.compute()['loss'],
+        'train_accuracy': state.metrics.compute()['accuracy'],
+      })
+
+      
+    test_state = state
+    for test_batch in test_loader:
+      test_batch = {
+        'image': jnp.array(test_batch[0].view(32, 28, 28, 1)),
+        'label': jnp.array(test_batch[1])
+      }
+      test_state = compute_metrics(state=test_state, batch=test_batch)
 
     wandb.log({
-      'train_loss': state.metrics.compute()['loss'],
-      'train_accuracy': state.metrics.compute()['accuracy'],
+      'test_loss': test_state.metrics.compute()['loss'],
+      'test_accuracy': test_state.metrics.compute()['accuracy'],
     })
-
-    if (step + 1) % num_steps_per_epoch == 0: # one training epoch has passed
-      # for metric, value in state.metrics.compute().items(): # compute metrics
-      #   metrics_history[f'train_{metric}'].append(value) # record metrics
-      state = state.replace(metrics=state.metrics.empty()) # reset train_metrics for next training epoch
-
-      # Compute metrics on the test set after each training epoch
-      test_state = state
-      for test_batch in test_ds.as_numpy_iterator():
-        test_state = compute_metrics(state=test_state, batch=test_batch)
-
-      # for metric,value in test_state.metrics.compute().items():
-      #   metrics_history[f'test_{metric}'].append(value)
-
-  
-      # print(f"test epoch: {(step+1) // num_steps_per_epoch}, "
-      #       f"loss: {metrics_history['test_loss'][-1]}, "
-      #       f"accuracy: {metrics_history['test_accuracy'][-1] * 100}")
-      wandb.log({
-        'test_loss': test_state.metrics.compute()['loss'],
-        'test_accuracy': test_state.metrics.compute()['accuracy'],
-      })
 
 
 

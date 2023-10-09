@@ -8,6 +8,8 @@ import optax                           # Common loss functions and optimizers
 from module import CNN
 from dataset import get_datasets
 import tensorflow as tf
+import wandb
+import ipdb
 
 @struct.dataclass
 class Metrics(metrics.Collection):
@@ -50,8 +52,21 @@ def compute_metrics(*, state, batch):
   return state
 
 def main():
+
+  wandb.login()
+
+  
+
   num_epochs = 10
   batch_size = 32
+
+  run = wandb.init(
+    project='jax-learn',
+    config = {
+      'num_epochs': num_epochs,
+      'batch_size': batch_size,
+    }
+  )
 
   train_ds, test_ds = get_datasets(num_epochs, batch_size)
 
@@ -67,21 +82,29 @@ def main():
 
   # since train_ds is replicated num_epochs times in get_datasets(), we divide by num_epochs
   num_steps_per_epoch = train_ds.cardinality().numpy() // num_epochs
+  # import ipdb
+  # ipdb.set_trace()
 
-  metrics_history = {'train_loss': [],
-                   'train_accuracy': [],
-                   'test_loss': [],
-                   'test_accuracy': []}
+  # metrics_history = {'train_loss': [],
+  #                  'train_accuracy': [],
+  #                  'test_loss': [],
+  #                  'test_accuracy': []}
   
   for step, batch in enumerate(train_ds.as_numpy_iterator()):
 
     # Run optimization steps over training batches and compute batch metrics
     state = train_step(state, batch) # get updated train state (which contains the updated parameters)
     state = compute_metrics(state=state, batch=batch) # aggregate batch metrics
+    # ipdb.set_trace()
+
+    wandb.log({
+      'train_loss': state.metrics.compute()['loss'],
+      'train_accuracy': state.metrics.compute()['accuracy'],
+    })
 
     if (step + 1) % num_steps_per_epoch == 0: # one training epoch has passed
-      for metric, value in state.metrics.compute().items(): # compute metrics
-        metrics_history[f'train_{metric}'].append(value) # record metrics
+      # for metric, value in state.metrics.compute().items(): # compute metrics
+      #   metrics_history[f'train_{metric}'].append(value) # record metrics
       state = state.replace(metrics=state.metrics.empty()) # reset train_metrics for next training epoch
 
       # Compute metrics on the test set after each training epoch
@@ -89,15 +112,18 @@ def main():
       for test_batch in test_ds.as_numpy_iterator():
         test_state = compute_metrics(state=test_state, batch=test_batch)
 
-      for metric,value in test_state.metrics.compute().items():
-        metrics_history[f'test_{metric}'].append(value)
+      # for metric,value in test_state.metrics.compute().items():
+      #   metrics_history[f'test_{metric}'].append(value)
 
-      print(f"train epoch: {(step+1) // num_steps_per_epoch}, "
-            f"loss: {metrics_history['train_loss'][-1]}, "
-            f"accuracy: {metrics_history['train_accuracy'][-1] * 100}")
-      print(f"test epoch: {(step+1) // num_steps_per_epoch}, "
-            f"loss: {metrics_history['test_loss'][-1]}, "
-            f"accuracy: {metrics_history['test_accuracy'][-1] * 100}")
+  
+      # print(f"test epoch: {(step+1) // num_steps_per_epoch}, "
+      #       f"loss: {metrics_history['test_loss'][-1]}, "
+      #       f"accuracy: {metrics_history['test_accuracy'][-1] * 100}")
+      wandb.log({
+        'test_loss': test_state.metrics.compute()['loss'],
+        'test_accuracy': test_state.metrics.compute()['accuracy'],
+      })
+
 
 
 if __name__ == "__main__":
